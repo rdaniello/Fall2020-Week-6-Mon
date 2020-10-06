@@ -3,8 +3,198 @@
 <head>
     <meta charset="UTF-8">
     <title>US COVID-19 State Cases</title>
+    <script src="https://d3js.org/d3.v6.min.js"></script>
+    <script src="https://d3js.org/topojson.v2.min.js"></script>
+
+    <style>
+        .tooltipData{
+            font-size: small;
+        }
+        #tooltip{
+            opacity: 0;
+            background-color: antiquewhite;
+            position: absolute;
+            width: 150px;
+            height: 50px;
+            padding: 5px;
+        }
+
+        #caption{
+            margin: auto;
+            padding-top: 1%;
+            padding-bottom: 1%;
+            padding-left: 4%;
+            font-family: serif;
+            font-size: 20pt;
+        }
+        #container
+        {
+            width: 90vw;
+            height: 80vh;
+        }
+        #canvas
+        {
+            width: 90vw;
+            height: 80vh;
+            background-color: azure;
+        }
+        path.path_geo{
+            stroke-width: .5px;
+            stroke: black;
+        }
+    </style>
 </head>
 <body>
+    <div id="caption">
+        US COVID-19 Cases by State.
+    </div>
+    <div id=layerDiv>
 
+    </div>
+    <div id='container'>
+        <svg id='canvas' viewbox='0 0 1000 800'></svg>
+    </div>
+    <div id="tooltip"></div>
+    <script>
+        // function to filter out territories not on map
+        // makes color scale more accurate
+        function filterStates(data){
+            for(var i = 0; i < data.length; i++){
+                let tmpS = data[i].state;
+                if(tmpS == 'Virgin Islands' 
+                    || tmpS == 'Puerto Rico' 
+                    || tmpS == 'Guam' 
+                    || tmpS == 'Northern Mariana Islands'){
+                        data.splice(i,1);
+                        i--;
+                }
+            }
+            return data;
+        }
+    </script>
+    <script>
+        let geoData = null
+        let covidData = null
+        let colorScaleCases = null
+        let colorScaleDeaths = null
+        let svg = d3.select('svg');
+        // get the covid and map data and build map -- call main
+        let covidCSV = 'https://raw.githubusercontent.com/nytimes/covid-19-data/master/live/us-states.csv';
+        let geoJson = 'data/us_state_5m_topo.json';
+        let projection = d3.geoAlbersUsa()
+            .scale(1300)
+            .translate([500,400]);
+        Promise.all(
+            [
+                d3.json(geoJson),
+                d3.csv(covidCSV)
+            ], d3.autoType())
+            .then(main)
+
+        // function to color each layer when drop down value changes
+        function updateLayer(val){
+            let caption = d3.select('#caption');
+            d3.selectAll('path')
+                .transition()
+                    .delay(function (d,i){return i*10})
+                    .duration(800)
+                .style('fill', function(d){
+                        try{
+                            if(val == 1){
+                                caption.text('US COVID-19 Cases by State.');
+                                return colorScaleCases(parseInt(covidData.get(d.properties.NAME)[0].cases));
+                            }
+                            else{
+                                caption.text('US COVID-19 Deaths by State.');
+                                return colorScaleDeaths(parseInt(covidData.get(d.properties.NAME)[0].deaths));
+                            }
+                        }
+                        catch{
+                            return 'white';
+                    }
+                });
+        }
+
+        // builds the map from passed data
+        function main(data){
+            // filter out territories not on map
+            data[1] = filterStates(data[1]);
+            geoData = topojson.feature(data[0], data[0].objects.cb_2018_us_state_5m).features;
+            let geo_generator = d3.geoPath().projection(projection);
+            covidData = d3.group(data[1], function(d){return d.state});
+
+            // filter out territories not on map
+            let cases_extent = d3.extent(data[1], function (d){ return +d.cases});
+            let deaths_extent = d3.extent(data[1], function (d){ return +d.deaths});
+
+            // get the color scale
+            colorScaleCases = d3.scaleLog()
+                .domain(cases_extent)
+                .range(["yellow","darkred"])
+                .interpolate(d3.interpolateHcl);
+            colorScaleDeaths = d3.scaleLog()
+                .domain(deaths_extent)
+                .range(["yellow","darkred"])
+                .interpolate(d3.interpolateHcl);
+            
+            // map canvas
+            let mapCanvas = svg.append('g')
+                                .attr('id','mapCanvas')
+            // the paths - the work
+            mapCanvas.selectAll('path')
+                .data(geoData)
+                .enter()
+                .append('path')
+                .attr('class', 'path_geo')
+                .attr('d', geo_generator)
+                .attr('fill', 'white')
+                // tool tip
+                .on('mousemove', function(mouseData,d){
+                    d3.select('#tooltip')
+                        .style('opacity', .8)
+                        .style('left', (mouseData.clientX+10).toString() + 'px')
+                        .style('top', (mouseData.clientY+10).toString() + 'px')
+                        .html(
+                            "<div class='tooltipData'>State: "+covidData.get(d.properties.NAME)[0].state+"</div>" +
+                            "<div class='tooltipData' style='color:blue'>Cases: "+covidData.get(d.properties.NAME)[0].cases.toString()+"</div>" +
+                            "<div class='tooltipData' style='color:red'>Deaths: "+covidData.get(d.properties.NAME)[0].deaths.toString()+"</div>")
+                })
+                .transition()
+                .delay(function (d,i){return i*20})
+                .duration(800)
+                .style('fill', function(d){
+                    try{
+                        return colorScaleCases(parseInt(covidData.get(d.properties.NAME)[0].cases));
+                    }
+                    catch{
+                        return 'white';
+                    }
+                });
+
+            svg.call(d3.zoom()
+                .extent([[0,0],[1000,800]])
+                .scaleExtent([1,8])
+                .on("zoom", zoomed)
+            )
+            function zoomed({transform}){
+                mapCanvas.attr("transform", transform);
+            }
+
+            // add dropdown for selecting deaths or cases
+            let select = d3.select('#layerDiv')
+                            .append('select')
+                            .attr('id','layerSelect')
+                            .attr('onchange', 'updateLayer(this.value)');
+            let options = d3.selectAll('select')
+                            .append('option')
+                            .text('Cases')
+                            .attr('value','1');
+            select.append('option')
+                            .text('Deaths')
+                            .attr('value','2');
+            
+            
+        }
+    </script>
 </body>
 </html>
